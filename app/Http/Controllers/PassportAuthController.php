@@ -16,8 +16,9 @@ class PassportAuthController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'name' => 'required|min:3',
-            'email' => 'required|email',
+            'email' => 'required|email|max:255|unique:users',
             'password' => 'required|min:8',
+            'confirm_password' => 'required|same:password'
         ]);
 
         if ($validator->fails()) {
@@ -27,12 +28,12 @@ class PassportAuthController extends Controller
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
-            'password' => bcrypt($request->password)
+            'password' => Hash::make($request->password)
         ]);
 
-        $token = $user->createToken("API TOKEN")->plainTextToken;
+        $token = $user->createToken("API TOKEN")->accessToken;
 
-        return $this->respondWithSuccess('User Created Successfully', [
+        return $this->respondWithSuccess('User Register Successfully', [
             'token_type' => 'Bearer',
             'access_token' => $token
         ]);
@@ -45,11 +46,11 @@ class PassportAuthController extends Controller
             'password' => $request->password
         ];
 
-        if (auth()->attempt($data)) {
-            $userId = auth()->user()->id;
-            $Access_token = DB::table('personal_access_tokens')->where('tokenable_id', $userId)->first();
-            if(!$Access_token){
-                $token = auth()->user()->createToken("API TOKEN")->plainTextToken;
+        if (Auth::attempt($data)) {
+            $userId = Auth::id();
+            $accessToken = DB::table('oauth_access_tokens')->where('client_id', $userId)->first();
+            if (!$accessToken) {
+                $token = Auth::user()->createToken("API TOKEN")->accessToken;
                 return $this->respondWithSuccess('User Logged In Successfully', [
                     'token_type' => 'Bearer',
                     'access_token' => $token
@@ -57,19 +58,33 @@ class PassportAuthController extends Controller
             }
             return $this->respondWithSuccess('User Logged In Successfully');
         } else {
-            return $this->respondWithError('Please Login first', null, 401);
+            return $this->respondWithError('Invalid credentials', null, 401);
         }
     }
+  
 
     public function sendPasswordResetToken(Request $request)
     {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email'
+        ]);
+
+        if ($validator->fails()) {
+            return $this->respondWithError('Validation error', $validator->errors(), 422);
+        }
+
         $user = User::where('email', $request->email)->first();
 
         if (!$user) {
             return $this->respondWithError('User not found', null, 404);
         }
 
-        $token = $this->createPasswordResetToken($request->email);
+        $token = Str::random(16);
+
+        DB::table('password_reset_tokens')->insert([
+            'email' => $request->email,
+            'token' => $token
+        ]);
 
         return $this->respondWithSuccess('Copy the token and proceed with password reset', [
             'token' => $token
@@ -78,7 +93,15 @@ class PassportAuthController extends Controller
 
     public function resetPassword(Request $request, $token)
     {
-        // Perform validation if required
+        $validator = Validator::make($request->all(), [
+            'token' => 'required',
+            'password' => 'required|min:8',
+            'confirm_password' => 'required|same:password'
+        ]);
+
+        if ($validator->fails()) {
+            return $this->respondWithError('Validation error', $validator->errors(), 422);
+        }
 
         $tokenData = DB::table('password_reset_tokens')->where('token', $token)->first();
 
@@ -92,7 +115,7 @@ class PassportAuthController extends Controller
             return $this->respondWithError('User not found', null, 404);
         }
 
-        $user->password = bcrypt($request->password);
+        $user->password = Hash::make($request->password);
         $user->save();
 
         DB::table('password_reset_tokens')->where('email', $user->email)->delete();
@@ -102,22 +125,9 @@ class PassportAuthController extends Controller
 
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
+        $request->user()->tokens()->delete();
 
         return $this->respondWithSuccess('User Logged Out Successfully');
-    }
-
-    private function createPasswordResetToken($email)
-    {
-        $token = Str::random(16);
-
-        DB::table('password_reset_tokens')->insert([
-            'email' => $email,
-            'token' => $token,
-            'created_at' => now()
-        ]);
-
-        return $token;
     }
 
     private function respondWithSuccess($message, $data = null, $statusCode = 200)
@@ -146,5 +156,9 @@ class PassportAuthController extends Controller
         }
 
         return response()->json($response, $statusCode);
+    }
+
+    public function check_login(){
+        return $this->respondWithError('invalid token or login first', 401);
     }
 }
